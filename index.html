@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Secure Messenger</title>
+  <title>Secure Messenger (No Keys)</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -54,14 +54,14 @@
 </head>
 <body>
   <div class="container">
-    <h1>🔐 Secure Messenger</h1>
+    <h1>🔐 Secure Messenger (No Keys)</h1>
 
     <div>
-      <div class="section-title">1️⃣ Paste Recipient Public Key</div>
-      <textarea id="publicKey" rows="3" placeholder="Paste recipient's public key here"></textarea>
-
-      <div class="section-title">2️⃣ Write Your Message</div>
+      <div class="section-title">1️⃣ Write Your Message</div>
       <textarea id="message" rows="4" placeholder="Type your secret message here"></textarea>
+
+      <div class="section-title">2️⃣ Enter Password</div>
+      <input type="password" id="password" placeholder="Enter a password to encrypt/decrypt">
 
       <button onclick="encryptMessage()">Encrypt & Share</button>
     </div>
@@ -75,10 +75,7 @@
     <hr>
 
     <div>
-      <div class="section-title">3️⃣ Paste Your Private Key</div>
-      <textarea id="privateKey" rows="3" placeholder="Paste your private key here"></textarea>
-
-      <div class="section-title">4️⃣ Paste Encrypted Data</div>
+      <div class="section-title">3️⃣ Paste Encrypted Data</div>
       <textarea id="dataToDecrypt" rows="6" placeholder="Paste encrypted data"></textarea>
 
       <button onclick="decryptMessage()">🔓 Decrypt Message</button>
@@ -102,47 +99,52 @@
       return bytes.buffer;
     }
 
-    async function encryptMessage() {
-      const publicKeyBase64 = document.getElementById('publicKey').value.trim();
-      const message = document.getElementById('message').value.trim();
+    async function deriveKey(password, salt) {
+      const encoder = new TextEncoder();
+      const keyMaterial = await crypto.subtle.importKey(
+        "raw",
+        encoder.encode(password),
+        { name: "PBKDF2" },
+        false,
+        ["deriveKey"]
+      );
+      return crypto.subtle.deriveKey(
+        {
+          name: "PBKDF2",
+          salt,
+          iterations: 100000,
+          hash: "SHA-256"
+        },
+        keyMaterial,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"]
+      );
+    }
 
-      if (!publicKeyBase64 || !message) {
-        alert('Please provide recipient public key and a message.');
+    async function encryptMessage() {
+      const message = document.getElementById('message').value.trim();
+      const password = document.getElementById('password').value.trim();
+
+      if (!password || !message) {
+        alert('Please provide a password and a message.');
         return;
       }
 
       try {
-        const recipientPublicKey = await crypto.subtle.importKey(
-          "spki",
-          base64ToArrayBuffer(publicKeyBase64),
-          { name: "RSA-OAEP", hash: "SHA-256" },
-          false,
-          ["encrypt"]
-        );
-
-        const aesKey = await crypto.subtle.generateKey(
-          { name: "AES-GCM", length: 256 },
-          true,
-          ["encrypt", "decrypt"]
-        );
-
-        const iv = crypto.getRandomValues(new Uint8Array(12));
         const encoder = new TextEncoder();
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const salt = crypto.getRandomValues(new Uint8Array(16));
+        const key = await deriveKey(password, salt);
+
         const encryptedMessage = await crypto.subtle.encrypt(
           { name: "AES-GCM", iv },
-          aesKey,
+          key,
           encoder.encode(message)
         );
 
-        const rawAesKey = await crypto.subtle.exportKey("raw", aesKey);
-        const encryptedAesKey = await crypto.subtle.encrypt(
-          { name: "RSA-OAEP" },
-          recipientPublicKey,
-          rawAesKey
-        );
-
         const package = {
-          encryptedAESKey: arrayBufferToBase64(encryptedAesKey),
+          salt: arrayBufferToBase64(salt),
           iv: arrayBufferToBase64(iv),
           encryptedMessage: arrayBufferToBase64(encryptedMessage)
         };
@@ -151,46 +153,26 @@
         alert("✅ Message encrypted! Share the encrypted data.");
       } catch (err) {
         console.error(err);
-        alert("❌ Encryption failed. Check the public key.");
+        alert("❌ Encryption failed.");
       }
     }
 
     async function decryptMessage() {
-      const privateKeyBase64 = document.getElementById('privateKey').value.trim();
+      const password = document.getElementById('password').value.trim();
       const data = document.getElementById('dataToDecrypt').value.trim();
 
-      if (!privateKeyBase64 || !data) {
-        alert('Please provide private key and encrypted data.');
+      if (!password || !data) {
+        alert('Please provide a password and encrypted data.');
         return;
       }
 
       try {
-        const privateKey = await crypto.subtle.importKey(
-          "pkcs8",
-          base64ToArrayBuffer(privateKeyBase64),
-          { name: "RSA-OAEP", hash: "SHA-256" },
-          false,
-          ["decrypt"]
-        );
-
         const package = JSON.parse(data);
-        const rawAesKey = await crypto.subtle.decrypt(
-          { name: "RSA-OAEP" },
-          privateKey,
-          base64ToArrayBuffer(package.encryptedAESKey)
-        );
-
-        const aesKey = await crypto.subtle.importKey(
-          "raw",
-          rawAesKey,
-          { name: "AES-GCM" },
-          false,
-          ["decrypt"]
-        );
+        const key = await deriveKey(password, base64ToArrayBuffer(package.salt));
 
         const decryptedBuffer = await crypto.subtle.decrypt(
           { name: "AES-GCM", iv: base64ToArrayBuffer(package.iv) },
-          aesKey,
+          key,
           base64ToArrayBuffer(package.encryptedMessage)
         );
 
@@ -199,7 +181,7 @@
         alert("✅ Message decrypted successfully!");
       } catch (err) {
         console.error(err);
-        alert("❌ Decryption failed. Check the private key and data.");
+        alert("❌ Decryption failed. Check the password and data.");
       }
     }
 
