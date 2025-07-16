@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Secure Messenger</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f9f9f9;
+      margin: 0;
+      padding: 15px;
+      color: #333;
+    }
+    .container {
+      max-width: 600px;
+      margin: auto;
+      background: #fff;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+    h1 {
+      text-align: center;
+      color: #007acc;
+    }
+    textarea, input {
+      width: 100%;
+      padding: 10px;
+      margin: 10px 0;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      font-size: 16px;
+    }
+    button {
+      width: 100%;
+      background-color: #007acc;
+      color: #fff;
+      border: none;
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 16px;
+      cursor: pointer;
+      margin: 5px 0;
+    }
+    button:hover {
+      background-color: #005fa3;
+    }
+    .section-title {
+      font-weight: bold;
+      margin-top: 15px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔐 Secure Messenger</h1>
+
+    <div>
+      <div class="section-title">1️⃣ Paste Recipient Public Key</div>
+      <textarea id="publicKey" rows="3" placeholder="Paste recipient's public key here"></textarea>
+
+      <div class="section-title">2️⃣ Write Your Message</div>
+      <textarea id="message" rows="4" placeholder="Type your secret message here"></textarea>
+
+      <button onclick="encryptMessage()">Encrypt & Share</button>
+    </div>
+
+    <div>
+      <div class="section-title">🔒 Encrypted Data (Copy & Send)</div>
+      <textarea id="encryptedData" rows="6" readonly></textarea>
+      <button onclick="copyEncrypted()">📋 Copy Encrypted Data</button>
+    </div>
+
+    <hr>
+
+    <div>
+      <div class="section-title">3️⃣ Paste Your Private Key</div>
+      <textarea id="privateKey" rows="3" placeholder="Paste your private key here"></textarea>
+
+      <div class="section-title">4️⃣ Paste Encrypted Data</div>
+      <textarea id="dataToDecrypt" rows="6" placeholder="Paste encrypted data"></textarea>
+
+      <button onclick="decryptMessage()">🔓 Decrypt Message</button>
+
+      <div class="section-title">✅ Decrypted Message</div>
+      <textarea id="decryptedMessage" rows="4" readonly></textarea>
+    </div>
+  </div>
+
+  <script>
+    function arrayBufferToBase64(buffer) {
+      return btoa(String.fromCharCode(...new Uint8Array(buffer)));
+    }
+    function base64ToArrayBuffer(base64) {
+      const binary = atob(base64);
+      const len = binary.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return bytes.buffer;
+    }
+
+    async function encryptMessage() {
+      const publicKeyBase64 = document.getElementById('publicKey').value.trim();
+      const message = document.getElementById('message').value.trim();
+
+      if (!publicKeyBase64 || !message) {
+        alert('Please provide recipient public key and a message.');
+        return;
+      }
+
+      try {
+        const recipientPublicKey = await crypto.subtle.importKey(
+          "spki",
+          base64ToArrayBuffer(publicKeyBase64),
+          { name: "RSA-OAEP", hash: "SHA-256" },
+          false,
+          ["encrypt"]
+        );
+
+        const aesKey = await crypto.subtle.generateKey(
+          { name: "AES-GCM", length: 256 },
+          true,
+          ["encrypt", "decrypt"]
+        );
+
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const encoder = new TextEncoder();
+        const encryptedMessage = await crypto.subtle.encrypt(
+          { name: "AES-GCM", iv },
+          aesKey,
+          encoder.encode(message)
+        );
+
+        const rawAesKey = await crypto.subtle.exportKey("raw", aesKey);
+        const encryptedAesKey = await crypto.subtle.encrypt(
+          { name: "RSA-OAEP" },
+          recipientPublicKey,
+          rawAesKey
+        );
+
+        const package = {
+          encryptedAESKey: arrayBufferToBase64(encryptedAesKey),
+          iv: arrayBufferToBase64(iv),
+          encryptedMessage: arrayBufferToBase64(encryptedMessage)
+        };
+
+        document.getElementById('encryptedData').value = JSON.stringify(package, null, 2);
+        alert("✅ Message encrypted! Share the encrypted data.");
+      } catch (err) {
+        console.error(err);
+        alert("❌ Encryption failed. Check the public key.");
+      }
+    }
+
+    async function decryptMessage() {
+      const privateKeyBase64 = document.getElementById('privateKey').value.trim();
+      const data = document.getElementById('dataToDecrypt').value.trim();
+
+      if (!privateKeyBase64 || !data) {
+        alert('Please provide private key and encrypted data.');
+        return;
+      }
+
+      try {
+        const privateKey = await crypto.subtle.importKey(
+          "pkcs8",
+          base64ToArrayBuffer(privateKeyBase64),
+          { name: "RSA-OAEP", hash: "SHA-256" },
+          false,
+          ["decrypt"]
+        );
+
+        const package = JSON.parse(data);
+        const rawAesKey = await crypto.subtle.decrypt(
+          { name: "RSA-OAEP" },
+          privateKey,
+          base64ToArrayBuffer(package.encryptedAESKey)
+        );
+
+        const aesKey = await crypto.subtle.importKey(
+          "raw",
+          rawAesKey,
+          { name: "AES-GCM" },
+          false,
+          ["decrypt"]
+        );
+
+        const decryptedBuffer = await crypto.subtle.decrypt(
+          { name: "AES-GCM", iv: base64ToArrayBuffer(package.iv) },
+          aesKey,
+          base64ToArrayBuffer(package.encryptedMessage)
+        );
+
+        const decoder = new TextDecoder();
+        document.getElementById('decryptedMessage').value = decoder.decode(decryptedBuffer);
+        alert("✅ Message decrypted successfully!");
+      } catch (err) {
+        console.error(err);
+        alert("❌ Decryption failed. Check the private key and data.");
+      }
+    }
+
+    async function copyEncrypted() {
+      const text = document.getElementById('encryptedData').value;
+      if (text) {
+        await navigator.clipboard.writeText(text);
+        alert('📋 Encrypted data copied to clipboard.');
+      }
+    }
+  </script>
+</body>
+</html>
